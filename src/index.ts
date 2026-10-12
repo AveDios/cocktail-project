@@ -1,7 +1,19 @@
 import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
-import { basename } from "node:path";
-import { error } from "node:console";
+import Database from "better-sqlite3";
+import { json } from "node:stream/consumers";
+
+const db = new Database("dev.db");
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS favorites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    drinkId TEXT UNIQUE NOT NULL,
+    drinkName TEXT NOT NULL,
+    thumbUrl TEXT,
+    createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
+  )
+`);
 
 const app = express();
 const PORT = 3000;
@@ -48,6 +60,9 @@ app.get("/", (_req: Request, res: Response) => {
             "GET /list/glasses",
             "GET /list/ingredients",
             "GET /list/alcoholic",
+            "GET /favorites",
+            "POST /favorites",
+            "DELETE /favorites/:drinkId",
         ],
     });
 });
@@ -186,6 +201,75 @@ app.get(
         try {
             const data = await fetchFromCocktailDB("/list.php?a=list");
             res.json(data);
+        } catch (err) {
+            next(err);
+        }
+    },
+);
+
+app.get(
+    "/favorites",
+    async (_req: Request, res: Response, next: NextFunction) => {
+        try {
+            const favorites = db
+                .prepare("SELECT * FROM favorites ORDER BY createdAt DESC")
+                .all();
+            res.json(favorites);
+        } catch (err) {
+            next(err);
+        }
+    },
+);
+
+app.post(
+    "/favorites",
+    async (req: Request, res: Response, next: NextFunction) => {
+        try {
+            const { drinkId, drinkName, thumbUrl } = req.body;
+
+            if (!drinkId || !drinkName) {
+                return res
+                    .status(400)
+                    .json({ error: "Wymagane: drinkId i drinkName" });
+            }
+
+            const stmt = db.prepare(`
+            INSERT INTO favorites (drinkId, drinkName, thumbUrl)
+            VALUES (?, ?, ?)
+            ON CONFLICT(drinkId) DO UPDATE SET
+                drinkName = excluded.drinkName,
+                thumbUrl = excluded.thumbUrl
+            `);
+
+            stmt.run(String(drinkId), drinkName, thumbUrl ?? null);
+
+            const favorite = db
+                .prepare("SELECT * FROM favorites WHERE drinkId = ?")
+                .get(String(drinkId));
+
+            res.status(201).json(favorite);
+        } catch (err) {
+            next(err);
+        }
+    },
+);
+
+app.delete(
+    "/favorites/:drinkId",
+    async (req: Request, res: Response, next: NextFunction) => {
+        try {
+            const drinkId = req.params;
+
+            const stmt = db.prepare("DELETE FROM favorites WHERE drinkId = ?");
+            const result = stmt.run(drinkId);
+
+            if (result.changes == 0) {
+                return res
+                    .status(404)
+                    .json({ error: "Nie znaleziono w ulubionych" });
+            }
+
+            res.json({ message: "Usunięto z ulubionych", drinkId });
         } catch (err) {
             next(err);
         }
